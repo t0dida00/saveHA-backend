@@ -1,0 +1,196 @@
+import { mkdir, writeFile } from 'node:fs/promises'
+import path from 'node:path'
+import { styleText } from 'node:util'
+import type { RequestHandler, Response } from 'express'
+import { z } from 'zod'
+import { env } from '../../config/env.ts'
+import { HttpError } from '../../lib/HttpError.ts'
+import { buildScheduleUrl, downloadOneP2pSchedule, ServiceNotOnRouteError } from './one.scraper.ts'
+import { ONE_LOCATIONS } from './oneLocations.ts'
+import { ONE_SERVICE_ROUTES, type OneServiceRoute } from './oneServices.ts'
+import { readSailings } from './scheduleXlsx.ts'
+import { type ScheduleColumn, weeklyScheduleCsv } from './weeklySchedule.ts'
+
+// Each download runs its own Chrome, so cap how many run at once
+const MAX_PARALLEL_DOWNLOADS = 3
+
+const locode = z.string().trim().toUpperCase().regex(/^[A-Z]{2}[A-Z0-9]{3}$/, 'Expected a UN/LOCODE like VNHPH')
+const locationName = z.string().trim().toUpperCase().min(1).optional()
+const fromDate = z.iso.date().optional()
+const weeks = z.coerce.number().int().min(1).max(8).default(8)
+
+const oneP2pQuerySchema = z
+  .object({
+    origin: locode.default('VNHPH'),
+    originName: locationName,
+    destination: locode.default('USLAX'),
+    destinationName: locationName,
+    service: z.string().trim().toUpperCase().regex(/^[A-Z0-9]{2,5}$/, 'Expected a service code like PS7').default('PS7'),
+    from: fromDate,
+    weeks,
+    format: z.enum(['csv', 'xlsx']).default('csv'),
+  })
+  .transform((query, ctx) => {
+    const originName = query.originName ?? ONE_LOCATIONS[query.origin]
+    const destinationName = query.destinationName ?? ONE_LOCATIONS[query.destination]
+    if (!originName) ctx.addIssue({ code: 'custom', path: ['originName'], message: `Required for ${query.origin}` })
+    if (!destinationName) {
+      ctx.addIssue({ code: 'custom', path: ['destinationName'], message: `Required for ${query.destination}` })
+    }
+    return { ...query, originName: originName!, destinationName: destinationName! }
+  })
+
+const serviceCode = z.string().trim().toUpperCase().regex(/^[A-Z0-9]{2,5}$/, 'Expected a service code like PS7')
+// ONE's page needs the location name, so only locations in ONE_LOCATIONS can be searched here
+const knownLocode = locode.refine((code) => code in ONE_LOCATIONS, {
+  message: `Unknown location. Known: ${Object.keys(ONE_LOCATIONS).join(', ')}`,
+})
+
+const oneWeeklyBodySchema = z.object({
+  date: fromDate,
+  next: z.literal([2, 4, 6, 8]).default(8),
+  /** "all" for ONE_SERVICE_ROUTES, or e.g. { "PS3": { "from": "VNCMP", "to": "USLAX" } } */
+  services_routes: z
+    .union([
+      z.literal('all'),
+      z
+        .record(serviceCode, z.object({ from: knownLocode, to: knownLocode }))
+        .refine((routes) => Object.keys(routes).length > 0, 'Add at least one service, or send "all"'),
+    ])
+    .default('all'),
+})
+
+export const getOneP2pSchedule: RequestHandler = async (req, res) => {
+  const query = oneP2pQuerySchema.parse(req.query)
+  const from = query.from ?? today()
+  const search = {
+    origin: query.origin,
+    originName: query.originName,
+    destination: query.destination,
+    destinationName: query.destinationName,
+    service: query.service,
+    fromDate: from,
+    weeks: query.weeks,
+  }
+  const file = await downloadOneP2pSchedule(search)
+
+  // e.g. ONE-HPH-LAX-06102026: port codes without the country prefix, departure date as ddmmyyyy
+  const originPort = query.origin.slice(2)
+  const destinationPort = query.destination.slice(2)
+  const basename = `ONE-${originPort}-${destinationPort}-${ddmmyyyy(from)}`
+
+  if (query.format === 'xlsx') {
+    await sendAndSave(res, `${basename}.xlsx`, file.data)
+    return
+  }
+
+  const column = {
+    label: `${query.service}\n(${originPort} - ${destinationPort})`,
+    url: buildScheduleUrl(search),
+    sailings: await readSailings(file.data),
+  }
+  await sendAndSave(res, `${basename}.csv`, weeklyScheduleCsv([column], from))
+}
+
+/** The requested services side by side, one column each, e.g. ONE-06102026.csv */
+export const postOneWeeklySchedule: RequestHandler = async (req, res) => {
+  const body = oneWeeklyBodySchema.parse(req.body ?? {})
+  const from = body.date ?? today()
+  const routes: OneServiceRoute[] =
+    body.services_routes === 'all'
+      ? ONE_SERVICE_ROUTES
+      : Object.entries(body.services_routes).map(([service, { from: origin, to: destination }]) => ({
+          service,
+          route: `${origin.slice(2)} - ${destination.slice(2)}`,
+          origin,
+          destination,
+        }))
+
+  const columns = await mapWithLimit(routes, MAX_PARALLEL_DOWNLOADS, (route) =>
+    serviceColumn(route, from, body.next),
+  )
+
+  // Sailings found per service, or N/A / ERROR when there was nothing to count
+  const summary = Object.fromEntries(
+    routes.map((route, i) => [route.service, columns[i]!.placeholder ?? columns[i]!.sailings.length]),
+  )
+  console.table({ sailings: summary })
+
+  await sendAndSave(res, `ONE-${ddmmyyyy(from)}.csv`, weeklyScheduleCsv(columns, from))
+}
+
+async function serviceColumn(route: OneServiceRoute, from: string, weeks: number): Promise<ScheduleColumn> {
+  const label = `${route.service}\n(${route.route})`
+  const search = {
+    origin: route.origin,
+    originName: ONE_LOCATIONS[route.origin]!,
+    destination: route.destination,
+    destinationName: ONE_LOCATIONS[route.destination]!,
+    service: route.service,
+    fromDate: from,
+    weeks,
+  }
+  const url = buildScheduleUrl(search)
+  const name = `${route.service} ${route.origin}-${route.destination}`
+
+  // One retry: under load the ONE page can be slow enough to look like an empty route
+  for (let attempt = 1; ; attempt++) {
+    const started = Date.now()
+    console.log(`calling to service ${name}${attempt > 1 ? ` (retry ${attempt - 1})` : ''}`)
+    try {
+      const file = await downloadOneP2pSchedule(search)
+      const sailings = await readSailings(file.data)
+      console.log(styleText('green', `service ${name}: ${sailings.length} sailings in ${seconds(started)}`))
+      return { label, url, sailings }
+    } catch (err) {
+      // ONE doesn't run this service on the route in this window
+      if (err instanceof ServiceNotOnRouteError) {
+        console.log(styleText('yellow', `service ${name}: not on this route (${seconds(started)})`))
+        return { label, url, placeholder: 'N/A', sailings: [] }
+      }
+      console.log(
+        styleText('red', `service ${name}: failed after ${seconds(started)}: ${err instanceof Error ? err.message : err}`),
+      )
+      if (attempt === 2) {
+        console.error(styleText('red', `ONE ${name} failed:`), err)
+        // Still no results after a retry: treat the route as having no schedule
+        const noSchedule = err instanceof HttpError && err.status === 404
+        return { label, url, placeholder: noSchedule ? 'N/A' : 'ERROR', sailings: [] }
+      }
+    }
+  }
+}
+
+async function sendAndSave(res: Response, filename: string, data: Buffer | string) {
+  await mkdir(env.DOWNLOADS_DIR, { recursive: true })
+  await writeFile(path.join(env.DOWNLOADS_DIR, filename), data)
+  res.attachment(filename)
+  res.type(path.extname(filename)).send(data)
+}
+
+async function mapWithLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length)
+  let next = 0
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++
+      results[index] = await fn(items[index]!)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  return results
+}
+
+function seconds(since: number): string {
+  return `${((Date.now() - since) / 1000).toFixed(1)}s`
+}
+
+function today(): string {
+  return new Date().toISOString().slice(0, 10)
+}
+
+/** "2026-10-06" -> "06102026" */
+function ddmmyyyy(date: string): string {
+  const [year, month, day] = date.split('-')
+  return `${day}${month}${year}`
+}

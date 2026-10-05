@@ -1,0 +1,54 @@
+@baseUrl = http://localhost:4000/api/v1
+
+### Health check
+GET {{baseUrl}}/health
+
+### All default ONE services side by side, one column each (takes ~1 min)
+POST {{baseUrl}}/schedules/one/weekly
+Content-Type: application/json
+
+{
+  "date": "2026-10-06",
+  "next": 8,
+  "services_routes": "all"
+}
+
+### Only the services you pick, each searched on its own route
+POST {{baseUrl}}/schedules/one/weekly
+Content-Type: application/json
+
+{
+  "date": "2026-10-06",
+  "next": 4,
+  "services_routes": {
+    "PS3": { "from": "VNCMP", "to": "USLAX" },
+    "PS7": { "from": "VNHPH", "to": "USLAX" }
+  }
+}
+
+### Error: unknown location / invalid "next" → 400
+POST {{baseUrl}}/schedules/one/weekly
+Content-Type: application/json
+
+{
+  "next": 3,
+  "services_routes": { "PS7": { "from": "VMHPH", "to": "USLAX" } }
+}
+
+### ONE schedule — Hai Phong → Los Angeles, PS7, as CSV (takes ~15s)
+GET {{baseUrl}}/schedules/one/p2p?from=2026-10-06
+
+### Same schedule as ONE's original xlsx
+GET {{baseUrl}}/schedules/one/p2p?from=2026-10-06&format=xlsx
+
+### Different service lane and a shorter window
+GET {{baseUrl}}/schedules/one/p2p?service=FDR&weeks=4
+
+### Other route — codes outside VNHPH/USLAX need the name as ONE spells it
+GET {{baseUrl}}/schedules/one/p2p?origin=VNSGN&originName=HO CHI MINH CITY, VIETNAM&service=PS7
+
+### Error: unknown service → 404 with the services available on the route
+GET {{baseUrl}}/schedules/one/p2p?service=XX1
+
+### Error: unknown origin without a name → 400
+GET {{baseUrl}}/schedules/one/p2p?origin=CNSHA

@@ -1,0 +1,4 @@
+{
+  // REST Client: show only the response body for requests.http, not the status line and headers
+  "rest-client.previewOption": "body"
+}
