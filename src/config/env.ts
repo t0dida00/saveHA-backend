@@ -7,8 +7,6 @@ const envSchema = z.object({
     .string()
     .default('http://localhost:5173')
     .transform((value) => value.split(',').map((origin) => origin.trim()).filter(Boolean)),
-  // Where downloaded schedules are saved, relative to the working directory unless absolute
-  DOWNLOADS_DIR: z.string().default('downloads'),
 })
 
 const parsed = envSchema.safeParse(process.env)

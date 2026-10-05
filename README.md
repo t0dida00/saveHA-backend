@@ -46,7 +46,6 @@ npx puppeteer browsers install chrome
 | `NODE_ENV` | `development` | `development`, `production` or `test` |
 | `PORT` | `4000` | Port the API listens on |
 | `CORS_ORIGIN` | `http://localhost:5173` | Frontend origins allowed to call the API, comma-separated |
-| `DOWNLOADS_DIR` | `downloads` | Folder where every generated file is also saved |
 
 Values are validated at startup in `src/config/env.ts`. If one is invalid, the server exits with a message saying which.
 

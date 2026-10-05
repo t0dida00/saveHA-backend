@@ -1,5 +1,3 @@
-import { readFile, rm } from 'node:fs/promises'
-import path from 'node:path'
 import ExcelJS from 'exceljs'
 import request from 'supertest'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -49,10 +47,7 @@ const WEEKLY_CSV =
   '"W45/2026\n02/11-08/11",ONE SINGAPORE 521E/ NOV 02\r\n'
 
 describe('GET /api/v1/schedules/one/p2p', () => {
-  const downloadsDir = process.env.DOWNLOADS_DIR!
-
   beforeEach(async () => {
-    await rm(downloadsDir, { recursive: true, force: true })
     vi.mocked(downloadOneP2pSchedule).mockResolvedValue({
       filename: 'ONE P2P Schedule VNHPH to USLAX 20261006.xlsx',
       data: await scheduleWorkbook(),
@@ -74,12 +69,6 @@ describe('GET /api/v1/schedules/one/p2p', () => {
       fromDate: '2026-10-06',
       weeks: 8,
     })
-  })
-
-  it('saves a copy to the downloads folder', async () => {
-    const res = await request(app).get('/api/v1/schedules/one/p2p?from=2026-10-06')
-    const saved = await readFile(path.join(downloadsDir, 'ONE-HPH-LAX-06102026.csv'), 'utf8')
-    expect(saved).toBe(res.text)
   })
 
   it('returns the original xlsx when asked', async () => {

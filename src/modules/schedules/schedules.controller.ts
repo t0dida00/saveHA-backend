@@ -1,9 +1,7 @@
-import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { styleText } from 'node:util'
 import type { RequestHandler, Response } from 'express'
 import { z } from 'zod'
-import { env } from '../../config/env.ts'
 import { HttpError } from '../../lib/HttpError.ts'
 import { buildScheduleUrl, downloadOneP2pSchedule, ServiceNotOnRouteError } from './one.scraper.ts'
 import { ONE_LOCATIONS } from './oneLocations.ts'
@@ -80,7 +78,7 @@ export const getOneP2pSchedule: RequestHandler = async (req, res) => {
   const basename = `ONE-${originPort}-${destinationPort}-${ddmmyyyy(from)}`
 
   if (query.format === 'xlsx') {
-    await sendAndSave(res, `${basename}.xlsx`, file.data)
+    sendFile(res, `${basename}.xlsx`, file.data)
     return
   }
 
@@ -89,7 +87,7 @@ export const getOneP2pSchedule: RequestHandler = async (req, res) => {
     url: buildScheduleUrl(search),
     sailings: await readSailings(file.data),
   }
-  await sendAndSave(res, `${basename}.csv`, weeklyScheduleCsv([column], from))
+  sendFile(res, `${basename}.csv`, weeklyScheduleCsv([column], from))
 }
 
 /** The requested services side by side, one column each, e.g. ONE-06102026.csv */
@@ -116,7 +114,7 @@ export const postOneWeeklySchedule: RequestHandler = async (req, res) => {
   )
   console.table({ sailings: summary })
 
-  await sendAndSave(res, `ONE-${ddmmyyyy(from)}.csv`, weeklyScheduleCsv(columns, from))
+  sendFile(res, `ONE-${ddmmyyyy(from)}.csv`, weeklyScheduleCsv(columns, from))
 }
 
 async function serviceColumn(route: OneServiceRoute, from: string, weeks: number): Promise<ScheduleColumn> {
@@ -161,9 +159,7 @@ async function serviceColumn(route: OneServiceRoute, from: string, weeks: number
   }
 }
 
-async function sendAndSave(res: Response, filename: string, data: Buffer | string) {
-  await mkdir(env.DOWNLOADS_DIR, { recursive: true })
-  await writeFile(path.join(env.DOWNLOADS_DIR, filename), data)
+function sendFile(res: Response, filename: string, data: Buffer | string) {
   res.attachment(filename)
   res.type(path.extname(filename)).send(data)
 }
