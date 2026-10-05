@@ -9,3 +9,4 @@ downloads
 .env
 .env.*
 !.env.example
+.vercel

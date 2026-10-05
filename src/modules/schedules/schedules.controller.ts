@@ -3,13 +3,14 @@ import { styleText } from 'node:util'
 import type { RequestHandler, Response } from 'express'
 import { z } from 'zod'
 import { HttpError } from '../../lib/HttpError.ts'
-import { buildScheduleUrl, downloadOneP2pSchedule, ServiceNotOnRouteError } from './one.scraper.ts'
+import type { Browser } from 'puppeteer'
+import { buildScheduleUrl, downloadOneP2pSchedule, launchBrowser, ServiceNotOnRouteError } from './one.scraper.ts'
 import { ONE_LOCATIONS } from './oneLocations.ts'
 import { ONE_SERVICE_ROUTES, type OneServiceRoute } from './oneServices.ts'
 import { readSailings } from './scheduleXlsx.ts'
 import { type ScheduleColumn, weeklyScheduleCsv } from './weeklySchedule.ts'
 
-// Each download runs its own Chrome, so cap how many run at once
+// Downloads share one Chrome, one tab each; cap the open tabs to stay within memory
 const MAX_PARALLEL_DOWNLOADS = 3
 
 const locode = z.string().trim().toUpperCase().regex(/^[A-Z]{2}[A-Z0-9]{3}$/, 'Expected a UN/LOCODE like VNHPH')
@@ -104,9 +105,15 @@ export const postOneWeeklySchedule: RequestHandler = async (req, res) => {
           destination,
         }))
 
-  const columns = await mapWithLimit(routes, MAX_PARALLEL_DOWNLOADS, (route) =>
-    serviceColumn(route, from, body.next),
-  )
+  const browser = await launchBrowser()
+  let columns: ScheduleColumn[]
+  try {
+    columns = await mapWithLimit(routes, MAX_PARALLEL_DOWNLOADS, (route) =>
+      serviceColumn(browser, route, from, body.next),
+    )
+  } finally {
+    await browser.close()
+  }
 
   // Sailings found per service, or N/A / ERROR when there was nothing to count
   const summary = Object.fromEntries(
@@ -117,7 +124,12 @@ export const postOneWeeklySchedule: RequestHandler = async (req, res) => {
   sendFile(res, `ONE-${ddmmyyyy(from)}.csv`, weeklyScheduleCsv(columns, from))
 }
 
-async function serviceColumn(route: OneServiceRoute, from: string, weeks: number): Promise<ScheduleColumn> {
+async function serviceColumn(
+  browser: Browser,
+  route: OneServiceRoute,
+  from: string,
+  weeks: number,
+): Promise<ScheduleColumn> {
   const label = `${route.service}\n(${route.route})`
   const search = {
     origin: route.origin,
@@ -136,7 +148,7 @@ async function serviceColumn(route: OneServiceRoute, from: string, weeks: number
     const started = Date.now()
     console.log(`calling to service ${name}${attempt > 1 ? ` (retry ${attempt - 1})` : ''}`)
     try {
-      const file = await downloadOneP2pSchedule(search)
+      const file = await downloadOneP2pSchedule(search, browser)
       const sailings = await readSailings(file.data)
       console.log(styleText('green', `service ${name}: ${sailings.length} sailings in ${seconds(started)}`))
       return { label, url, sailings }

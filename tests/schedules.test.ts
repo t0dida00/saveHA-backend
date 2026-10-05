@@ -9,6 +9,7 @@ import { ONE_SERVICE_ROUTES } from '../src/modules/schedules/oneServices.ts'
 vi.mock('../src/modules/schedules/one.scraper.ts', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../src/modules/schedules/one.scraper.ts')>()),
   downloadOneP2pSchedule: vi.fn(),
+  launchBrowser: vi.fn(async () => ({ close: vi.fn() })),
 }))
 
 const app = createApp()
@@ -107,6 +108,7 @@ describe('POST /api/v1/schedules/one/weekly', () => {
     for (const route of ONE_SERVICE_ROUTES) {
       expect(downloadOneP2pSchedule).toHaveBeenCalledWith(
         expect.objectContaining({ service: route.service, origin: route.origin, destination: route.destination }),
+        expect.anything(),
       )
     }
   })
@@ -149,6 +151,7 @@ describe('POST /api/v1/schedules/one/weekly', () => {
     expect(downloadOneP2pSchedule).toHaveBeenCalledTimes(2)
     expect(downloadOneP2pSchedule).toHaveBeenCalledWith(
       expect.objectContaining({ service: 'PS7', origin: 'VNHPH', originName: 'HAI PHONG, VIETNAM', weeks: 4 }),
+      expect.anything(),
     )
     expect(res.text.split('\r\n')[0]).toBe('\uFEFFONE,"PS3\n(CMP - LAX)","PS7\n(HPH - LAX)"')
   })
@@ -157,7 +160,7 @@ describe('POST /api/v1/schedules/one/weekly', () => {
     const res = await postWeekly({})
     expect(res.status).toBe(200)
     expect(downloadOneP2pSchedule).toHaveBeenCalledTimes(ONE_SERVICE_ROUTES.length)
-    expect(downloadOneP2pSchedule).toHaveBeenCalledWith(expect.objectContaining({ weeks: 8 }))
+    expect(downloadOneP2pSchedule).toHaveBeenCalledWith(expect.objectContaining({ weeks: 8 }), expect.anything())
   })
 
   it('rejects an unknown location or a week count other than 2/4/6/8', async () => {
