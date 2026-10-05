@@ -11,8 +11,8 @@ export function createApp() {
   const app = express()
 
   app.use(helmet())
-  // Expose Content-Disposition so the frontend can read the filename of downloaded files
-  app.use(cors({ origin: env.CORS_ORIGIN, exposedHeaders: ['Content-Disposition'] }))
+  // Any origin may call the API. Content-Disposition is exposed so the frontend can read download filenames.
+  app.use(cors({ origin: '*', exposedHeaders: ['Content-Disposition'] }))
   app.use(express.json({ limit: '1mb' }))
   if (env.NODE_ENV !== 'test') app.use(morgan(env.NODE_ENV === 'production' ? 'combined' : 'dev'))
 

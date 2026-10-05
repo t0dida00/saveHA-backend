@@ -45,7 +45,6 @@ npx puppeteer browsers install chrome
 |---|---|---|
 | `NODE_ENV` | `development` | `development`, `production` or `test` |
 | `PORT` | `4000` | Port the API listens on |
-| `CORS_ORIGIN` | `http://localhost:5173` | Frontend origins allowed to call the API, comma-separated |
 
 Values are validated at startup in `src/config/env.ts`. If one is invalid, the server exits with a message saying which.
 
@@ -132,7 +131,7 @@ link.click()
 URL.revokeObjectURL(link.href)
 ```
 
-`Content-Disposition` is exposed through CORS, so the frontend can read the filename.
+CORS allows any origin, and `Content-Disposition` is exposed, so the frontend can read the filename.
 
 ### Trying requests
 
@@ -145,7 +144,6 @@ The repo deploys to Vercel as-is: pushing to `main` builds production.
 - **`vercel.json`** turns off Vercel's Express auto-detection, runs `npm run build`, and sends every request to `api/index.js`, which serves the compiled app from `dist/`. Functions may run up to 300 seconds.
 - **Chrome:** Vercel functions can't run the Chrome that Puppeteer downloads, so when `VERCEL` is set, `launchBrowser()` starts the serverless build from `@sparticuz/chromium` instead. `vercel.json` includes its binaries in the function.
 - **`public/`** is intentionally empty. It stops Vercel from serving repository files as static files.
-- **Environment variables:** set `CORS_ORIGIN` in the Vercel project to your frontend's URL, e.g. `https://saveha.vercel.app`.
 
 ## How the ONE download works
 
