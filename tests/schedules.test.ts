@@ -233,3 +233,40 @@ describe('GET /api/v1/schedules/one/weekly/latest', () => {
     expect(res.status).toBe(404)
   })
 })
+
+describe('GET /api/v1/schedules/one/healthCheck', () => {
+  const runCheck = () => request(app).get('/api/v1/schedules/one/healthCheck').set('Authorization', 'Bearer test-cron-secret')
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-10-06T02:00:00Z') })
+    vi.mocked(downloadOneP2pSchedule).mockReset()
+    vi.mocked(saveLatestWeeklySchedule).mockReset()
+  })
+  afterEach(() => vi.useRealTimers())
+
+  it('scrapes PS3 from Cai Mep to Los Angeles for 2 weeks from today', async () => {
+    vi.mocked(downloadOneP2pSchedule).mockResolvedValue({ filename: 'schedule.xlsx', data: await scheduleWorkbook() })
+    const res = await runCheck()
+    expect(res.status).toBe(200)
+    expect(res.body).toEqual({ alive: true, url: expect.stringContaining('oriLocCdParam=VNCMP'), seconds: expect.any(Number) })
+    expect(downloadOneP2pSchedule).toHaveBeenCalledOnce()
+    expect(downloadOneP2pSchedule).toHaveBeenCalledWith(
+      expect.objectContaining({ service: 'PS3', origin: 'VNCMP', destination: 'USLAX', fromDate: '2026-10-06', weeks: 2 }),
+      expect.anything(),
+    )
+    expect(saveLatestWeeklySchedule).not.toHaveBeenCalled()
+  })
+
+  it('answers 503 when ONE returns no sailings', async () => {
+    vi.mocked(downloadOneP2pSchedule).mockRejectedValue(new Error('Download button not found'))
+    const res = await runCheck()
+    expect(res.status).toBe(503)
+    expect(res.body).toMatchObject({ alive: false })
+  })
+
+  it('rejects a request without the cron secret', async () => {
+    const res = await request(app).get('/api/v1/schedules/one/healthCheck')
+    expect(res.status).toBe(401)
+    expect(downloadOneP2pSchedule).not.toHaveBeenCalled()
+  })
+})

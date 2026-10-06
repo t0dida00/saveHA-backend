@@ -10,6 +10,10 @@ GET {{baseUrl}}/schedules/one/weekly/latest
 GET {{baseUrl}}/schedules/one/weekly/cron
 Authorization: Bearer {{$dotenv CRON_SECRET}}
 
+### Check that scraping ONE still works: PS3 VNCMP → USLAX, 2 weeks (~15s, 503 if no sailings)
+GET {{baseUrl}}/schedules/one/healthCheck
+Authorization: Bearer {{$dotenv CRON_SECRET}}
+
 ### All default ONE services side by side, one column each (takes ~1 min)
 POST {{baseUrl}}/schedules/one/weekly
 Content-Type: application/json

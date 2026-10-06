@@ -1,6 +1,6 @@
 import path from 'node:path'
 import { styleText } from 'node:util'
-import type { RequestHandler, Response } from 'express'
+import type { Request, RequestHandler, Response } from 'express'
 import { z } from 'zod'
 import { env } from '../../config/env.ts'
 import { HttpError } from '../../lib/HttpError.ts'
@@ -101,16 +101,46 @@ export const postOneWeeklySchedule: RequestHandler = async (req, res) => {
 
 /**
  * Vercel Cron entry point (cron jobs can only send GET): every service in ONE_SERVICE_ROUTES,
- * from today, next 8 weeks, saved to Vercel Blob for GET /one/weekly/latest. Vercel sends `Authorization: Bearer $CRON_SECRET` when that env var is set.
+ * from today, next 8 weeks, saved to Vercel Blob for GET /one/weekly/latest.
  */
 export const getOneWeeklyScheduleCron: RequestHandler = async (req, res) => {
-  if (env.CRON_SECRET && req.get('authorization') !== `Bearer ${env.CRON_SECRET}`) {
-    throw new HttpError(401, 'Unauthorized')
-  }
+  requireCronSecret(req)
   const schedule = await oneWeeklyCsv({ date: today(), next: 8, services_routes: 'all' })
   await saveLatestWeeklySchedule(schedule)
   console.log(styleText('green', `saved ${schedule.filename} as the latest weekly schedule`))
   res.json({ saved: schedule.filename })
+}
+
+// One service the check expects ONE to always run
+const CHECK_ROUTE: OneServiceRoute = { service: 'PS3', route: 'CMP - LAX', origin: 'VNCMP', destination: 'USLAX' }
+const CHECK_WEEKS = 2
+
+/**
+ * Vercel Cron health check: scrapes one service for 2 weeks from today to catch ONE changing its
+ * page or blocking us before the Saturday run does. Nothing is saved. Answers 503 when no sailings
+ * come back, so the run shows as failed in Vercel's cron logs.
+ */
+export const getOneHealthCheck: RequestHandler = async (req, res) => {
+  requireCronSecret(req)
+  const from = today()
+  const started = Date.now()
+  const browser = await launchBrowser()
+  let column: ScheduleColumn
+  try {
+    column = await serviceColumn(browser, CHECK_ROUTE, from, CHECK_WEEKS)
+  } finally {
+    await browser.close()
+  }
+
+  const alive = column.sailings.length > 0
+  const name = `${CHECK_ROUTE.service} ${CHECK_ROUTE.origin}-${CHECK_ROUTE.destination}`
+  const verdict = alive ? 'passed' : 'FAILED'
+  console.log(styleText(alive ? 'green' : 'red', `ONE check ${verdict}: ${name}, ${column.sailings.length} sailings`))
+  res.status(alive ? 200 : 503).json({
+    alive,
+    url: column.url,
+    seconds: Math.round((Date.now() - started) / 1000),
+  })
 }
 
 /** The CSV saved by the last cron run: instant, unlike POST /one/weekly which scrapes ONE live */
@@ -195,6 +225,13 @@ async function serviceColumn(
         return { label, url, placeholder: noSchedule ? 'N/A' : 'ERROR', sailings: [] }
       }
     }
+  }
+}
+
+/** Vercel Cron sends `Authorization: Bearer $CRON_SECRET` when that env var is set */
+function requireCronSecret(req: Request) {
+  if (env.CRON_SECRET && req.get('authorization') !== `Bearer ${env.CRON_SECRET}`) {
+    throw new HttpError(401, 'Unauthorized')
   }
 }
 
