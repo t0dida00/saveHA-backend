@@ -5,7 +5,12 @@ import { createApp } from '../src/app.ts'
 import { HttpError } from '../src/lib/HttpError.ts'
 import { downloadOneP2pSchedule, ServiceNotOnRouteError } from '../src/modules/schedules/one.scraper.ts'
 import { ONE_SERVICE_ROUTES } from '../src/modules/schedules/oneServices.ts'
-import { readLatestWeeklySchedule, saveLatestWeeklySchedule } from '../src/modules/schedules/scheduleStore.ts'
+import {
+  readLatestHealthCheck,
+  readLatestWeeklySchedule,
+  saveLatestHealthCheck,
+  saveLatestWeeklySchedule,
+} from '../src/modules/schedules/scheduleStore.ts'
 
 vi.mock('../src/modules/schedules/one.scraper.ts', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../src/modules/schedules/one.scraper.ts')>()),
@@ -16,6 +21,8 @@ vi.mock('../src/modules/schedules/one.scraper.ts', async (importOriginal) => ({
 vi.mock('../src/modules/schedules/scheduleStore.ts', () => ({
   saveLatestWeeklySchedule: vi.fn(),
   readLatestWeeklySchedule: vi.fn(),
+  saveLatestHealthCheck: vi.fn(),
+  readLatestHealthCheck: vi.fn(),
 }))
 
 const app = createApp()
@@ -241,6 +248,7 @@ describe('GET /api/v1/schedules/one/healthCheck', () => {
     vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-10-06T02:00:00Z') })
     vi.mocked(downloadOneP2pSchedule).mockReset()
     vi.mocked(saveLatestWeeklySchedule).mockReset()
+    vi.mocked(saveLatestHealthCheck).mockReset()
   })
   afterEach(() => vi.useRealTimers())
 
@@ -255,6 +263,11 @@ describe('GET /api/v1/schedules/one/healthCheck', () => {
       expect.anything(),
     )
     expect(saveLatestWeeklySchedule).not.toHaveBeenCalled()
+    expect(saveLatestHealthCheck).toHaveBeenCalledWith({
+      alive: true,
+      checkedAt: '2026-10-06T02:00:00.000Z',
+      seconds: expect.any(Number),
+    })
   })
 
   it('answers 503 when ONE returns no sailings', async () => {
@@ -262,11 +275,31 @@ describe('GET /api/v1/schedules/one/healthCheck', () => {
     const res = await runCheck()
     expect(res.status).toBe(503)
     expect(res.body).toMatchObject({ alive: false })
+    expect(saveLatestHealthCheck).toHaveBeenCalledWith(expect.objectContaining({ alive: false }))
   })
 
   it('rejects a request without the cron secret', async () => {
     const res = await request(app).get('/api/v1/schedules/one/healthCheck')
     expect(res.status).toBe(401)
     expect(downloadOneP2pSchedule).not.toHaveBeenCalled()
+  })
+})
+
+describe('GET /api/v1/schedules/one/healthCheck/latest', () => {
+  const getLatestCheck = () => request(app).get('/api/v1/schedules/one/healthCheck/latest')
+
+  it('returns the last saved check without the cron secret', async () => {
+    const check = { alive: true, checkedAt: '2026-10-06T02:00:12.000Z', seconds: 12 }
+    vi.mocked(readLatestHealthCheck).mockResolvedValue(check)
+    const res = await getLatestCheck()
+    expect(res.status).toBe(200)
+    expect(res.body).toEqual(check)
+    expect(downloadOneP2pSchedule).not.toHaveBeenCalled()
+  })
+
+  it('returns 404 before the first check', async () => {
+    vi.mocked(readLatestHealthCheck).mockResolvedValue(null)
+    const res = await getLatestCheck()
+    expect(res.status).toBe(404)
   })
 })

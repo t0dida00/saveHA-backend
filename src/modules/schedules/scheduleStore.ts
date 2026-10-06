@@ -4,6 +4,7 @@ import { get, put } from '@vercel/blob'
 // JSON rather than CSV so the dated filename travels with it.
 const LATEST_PATH = 'schedules/one-weekly/latest.json'
 const HISTORY_DIR = 'schedules/one-weekly/history'
+const HEALTH_PATH = 'schedules/one-health/latest.json'
 
 export interface StoredSchedule {
   filename: string
@@ -24,4 +25,28 @@ export async function readLatestWeeklySchedule(): Promise<StoredSchedule | null>
   const result = await get(LATEST_PATH, { access: 'private', useCache: false })
   if (!result || result.statusCode !== 200) return null
   return (await new Response(result.stream).json()) as StoredSchedule
+}
+
+export interface StoredHealthCheck {
+  alive: boolean
+  /** ISO timestamp of when the check finished */
+  checkedAt: string
+  seconds: number
+}
+
+/** Overwrites the result of the last health check */
+export async function saveLatestHealthCheck(check: StoredHealthCheck): Promise<void> {
+  await put(HEALTH_PATH, JSON.stringify(check), {
+    access: 'private',
+    addRandomSuffix: false,
+    allowOverwrite: true,
+    contentType: 'application/json',
+  })
+}
+
+/** The result of the last health check, or null before the first one */
+export async function readLatestHealthCheck(): Promise<StoredHealthCheck | null> {
+  const result = await get(HEALTH_PATH, { access: 'private', useCache: false })
+  if (!result || result.statusCode !== 200) return null
+  return (await new Response(result.stream).json()) as StoredHealthCheck
 }

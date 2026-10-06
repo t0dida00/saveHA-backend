@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import {
   getLatestOneWeeklySchedule,
+  getLatestOneHealthCheck,
   getOneHealthCheck,
   getOneP2pSchedule,
   getOneWeeklyScheduleCron,
@@ -14,3 +15,4 @@ schedulesRouter.post('/one/weekly', postOneWeeklySchedule)
 schedulesRouter.get('/one/weekly/cron', getOneWeeklyScheduleCron)
 schedulesRouter.get('/one/weekly/latest', getLatestOneWeeklySchedule)
 schedulesRouter.get('/one/healthCheck', getOneHealthCheck)
+schedulesRouter.get('/one/healthCheck/latest', getLatestOneHealthCheck)

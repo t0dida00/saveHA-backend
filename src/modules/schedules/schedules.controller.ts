@@ -9,7 +9,12 @@ import { buildScheduleUrl, downloadOneP2pSchedule, launchBrowser, ServiceNotOnRo
 import { ONE_LOCATIONS } from './oneLocations.ts'
 import { ONE_SERVICE_ROUTES, type OneServiceRoute } from './oneServices.ts'
 import { readSailings } from './scheduleXlsx.ts'
-import { readLatestWeeklySchedule, saveLatestWeeklySchedule } from './scheduleStore.ts'
+import {
+  readLatestHealthCheck,
+  readLatestWeeklySchedule,
+  saveLatestHealthCheck,
+  saveLatestWeeklySchedule,
+} from './scheduleStore.ts'
 import { type ScheduleColumn, weeklyScheduleCsv } from './weeklySchedule.ts'
 
 // Downloads share one Chrome, one tab each; cap the open tabs to stay within memory
@@ -117,30 +122,46 @@ const CHECK_WEEKS = 2
 
 /**
  * Vercel Cron health check: scrapes one service for 2 weeks from today to catch ONE changing its
- * page or blocking us before the Saturday run does. Nothing is saved. Answers 503 when no sailings
- * come back, so the run shows as failed in Vercel's cron logs.
+ * page or blocking us before the Saturday run does. Only the verdict is saved, for
+ * /healthCheck/latest. Answers 503 when no sailings come back, so the run shows as failed in
+ * Vercel's cron logs.
  */
 export const getOneHealthCheck: RequestHandler = async (req, res) => {
   requireCronSecret(req)
   const from = today()
   const started = Date.now()
-  const browser = await launchBrowser()
+  const elapsed = () => Math.round((Date.now() - started) / 1000)
   let column: ScheduleColumn
   try {
-    column = await serviceColumn(browser, CHECK_ROUTE, from, CHECK_WEEKS)
-  } finally {
-    await browser.close()
+    const browser = await launchBrowser()
+    try {
+      column = await serviceColumn(browser, CHECK_ROUTE, from, CHECK_WEEKS)
+    } finally {
+      await browser.close()
+    }
+  } catch (err) {
+    // Chrome didn't start: still a dead scraper
+    await saveLatestHealthCheck({ alive: false, checkedAt: new Date().toISOString(), seconds: elapsed() })
+    throw err
   }
 
   const alive = column.sailings.length > 0
+  await saveLatestHealthCheck({ alive, checkedAt: new Date().toISOString(), seconds: elapsed() })
   const name = `${CHECK_ROUTE.service} ${CHECK_ROUTE.origin}-${CHECK_ROUTE.destination}`
   const verdict = alive ? 'passed' : 'FAILED'
   console.log(styleText(alive ? 'green' : 'red', `ONE check ${verdict}: ${name}, ${column.sailings.length} sailings`))
   res.status(alive ? 200 : 503).json({
     alive,
     url: column.url,
-    seconds: Math.round((Date.now() - started) / 1000),
+    seconds: elapsed(),
   })
+}
+
+/** The last health check's verdict, read from Blob: public and instant, for the frontend's status dot */
+export const getLatestOneHealthCheck: RequestHandler = async (_req, res) => {
+  const check = await readLatestHealthCheck()
+  if (!check) throw new HttpError(404, 'No health check yet: the cron job has not run')
+  res.json(check)
 }
 
 /** The CSV saved by the last cron run: instant, unlike POST /one/weekly which scrapes ONE live */

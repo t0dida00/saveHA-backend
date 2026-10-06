@@ -114,12 +114,20 @@ The blobs are private. When `CRON_SECRET` is set, requests need `Authorization: 
 
 ### `GET /schedules/one/healthCheck`
 
-Called by Vercel Cron every 3 days to check that scraping ONE still works. It scrapes one service (PS3, Cai Mep → Los Angeles) for 2 weeks from today and saves nothing. Takes about 15 seconds.
+Called by Vercel Cron every 3 days to check that scraping ONE still works. It scrapes one service (PS3, Cai Mep → Los Angeles) for 2 weeks from today and saves only the verdict, to `schedules/one-health/latest.json` in Vercel Blob. Takes about 15 seconds.
 
 Returns `200` with `"alive": true` when sailings come back, and `503` with `"alive": false` when none do, so the run shows as failed in Vercel's cron logs. The server log says why. `url` is the ONE search it ran and `seconds` how long it took. Needs the same `CRON_SECRET` header as the weekly cron.
 
 ```json
 { "alive": true, "url": "https://www.one-line.com/...", "seconds": 12 }
+```
+
+### `GET /schedules/one/healthCheck/latest`
+
+The verdict of the last health check, for the frontend's status dot. Public and instant: it reads the saved result and never scrapes. Returns 404 until the health check has run once.
+
+```json
+{ "alive": true, "checkedAt": "2026-10-06T02:00:12.000Z", "seconds": 12 }
 ```
 
 ### `GET /schedules/one/p2p`
