@@ -2,12 +2,14 @@ import path from 'node:path'
 import { styleText } from 'node:util'
 import type { RequestHandler, Response } from 'express'
 import { z } from 'zod'
+import { env } from '../../config/env.ts'
 import { HttpError } from '../../lib/HttpError.ts'
 import type { Browser } from 'puppeteer'
 import { buildScheduleUrl, downloadOneP2pSchedule, launchBrowser, ServiceNotOnRouteError } from './one.scraper.ts'
 import { ONE_LOCATIONS } from './oneLocations.ts'
 import { ONE_SERVICE_ROUTES, type OneServiceRoute } from './oneServices.ts'
 import { readSailings } from './scheduleXlsx.ts'
+import { readLatestWeeklySchedule, saveLatestWeeklySchedule } from './scheduleStore.ts'
 import { type ScheduleColumn, weeklyScheduleCsv } from './weeklySchedule.ts'
 
 // Downloads share one Chrome, one tab each; cap the open tabs to stay within memory
@@ -93,7 +95,32 @@ export const getOneP2pSchedule: RequestHandler = async (req, res) => {
 
 /** The requested services side by side, one column each, e.g. ONE-06102026.csv */
 export const postOneWeeklySchedule: RequestHandler = async (req, res) => {
-  const body = oneWeeklyBodySchema.parse(req.body ?? {})
+  const { filename, csv } = await oneWeeklyCsv(oneWeeklyBodySchema.parse(req.body ?? {}))
+  sendFile(res, filename, csv)
+}
+
+/**
+ * Vercel Cron entry point (cron jobs can only send GET): every service in ONE_SERVICE_ROUTES,
+ * from today, next 8 weeks, saved to Vercel Blob for GET /one/weekly/latest. Vercel sends `Authorization: Bearer $CRON_SECRET` when that env var is set.
+ */
+export const getOneWeeklyScheduleCron: RequestHandler = async (req, res) => {
+  if (env.CRON_SECRET && req.get('authorization') !== `Bearer ${env.CRON_SECRET}`) {
+    throw new HttpError(401, 'Unauthorized')
+  }
+  const schedule = await oneWeeklyCsv({ date: today(), next: 8, services_routes: 'all' })
+  await saveLatestWeeklySchedule(schedule)
+  console.log(styleText('green', `saved ${schedule.filename} as the latest weekly schedule`))
+  res.json({ saved: schedule.filename })
+}
+
+/** The CSV saved by the last cron run: instant, unlike POST /one/weekly which scrapes ONE live */
+export const getLatestOneWeeklySchedule: RequestHandler = async (_req, res) => {
+  const schedule = await readLatestWeeklySchedule()
+  if (!schedule) throw new HttpError(404, 'No saved schedule yet: the cron job has not run')
+  sendFile(res, schedule.filename, schedule.csv)
+}
+
+async function oneWeeklyCsv(body: z.output<typeof oneWeeklyBodySchema>): Promise<{ filename: string; csv: string }> {
   const from = body.date ?? today()
   const routes: OneServiceRoute[] =
     body.services_routes === 'all'
@@ -121,7 +148,7 @@ export const postOneWeeklySchedule: RequestHandler = async (req, res) => {
   )
   console.table({ sailings: summary })
 
-  sendFile(res, `ONE-${ddmmyyyy(from)}.csv`, weeklyScheduleCsv(columns, from))
+  return { filename: `ONE-${ddmmyyyy(from)}.csv`, csv: weeklyScheduleCsv(columns, from) }
 }
 
 async function serviceColumn(

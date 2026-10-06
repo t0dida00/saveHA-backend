@@ -1,15 +1,21 @@
 import ExcelJS from 'exceljs'
 import request from 'supertest'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp } from '../src/app.ts'
 import { HttpError } from '../src/lib/HttpError.ts'
 import { downloadOneP2pSchedule, ServiceNotOnRouteError } from '../src/modules/schedules/one.scraper.ts'
 import { ONE_SERVICE_ROUTES } from '../src/modules/schedules/oneServices.ts'
+import { readLatestWeeklySchedule, saveLatestWeeklySchedule } from '../src/modules/schedules/scheduleStore.ts'
 
 vi.mock('../src/modules/schedules/one.scraper.ts', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../src/modules/schedules/one.scraper.ts')>()),
   downloadOneP2pSchedule: vi.fn(),
   launchBrowser: vi.fn(async () => ({ close: vi.fn() })),
+}))
+
+vi.mock('../src/modules/schedules/scheduleStore.ts', () => ({
+  saveLatestWeeklySchedule: vi.fn(),
+  readLatestWeeklySchedule: vi.fn(),
 }))
 
 const app = createApp()
@@ -169,5 +175,61 @@ describe('POST /api/v1/schedules/one/weekly', () => {
     expect(res.body.details).toHaveProperty('next')
     expect(res.body.details).toHaveProperty('services_routes')
     expect(downloadOneP2pSchedule).not.toHaveBeenCalled()
+  })
+})
+
+describe('GET /api/v1/schedules/one/weekly/cron', () => {
+  const runCron = () => request(app).get('/api/v1/schedules/one/weekly/cron')
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-10-06T01:00:00Z') })
+    vi.mocked(saveLatestWeeklySchedule).mockReset()
+    vi.mocked(downloadOneP2pSchedule).mockReset()
+    vi.mocked(downloadOneP2pSchedule).mockImplementation(async () => ({
+      filename: 'schedule.xlsx',
+      data: await scheduleWorkbook([]),
+    }))
+  })
+  afterEach(() => vi.useRealTimers())
+
+  it('scrapes every service from today for 8 weeks and saves the CSV', async () => {
+    const res = await runCron().set('Authorization', 'Bearer test-cron-secret')
+    expect(res.status).toBe(200)
+    expect(res.body).toEqual({ saved: 'ONE-06102026.csv' })
+    expect(downloadOneP2pSchedule).toHaveBeenCalledTimes(ONE_SERVICE_ROUTES.length)
+    expect(downloadOneP2pSchedule).toHaveBeenCalledWith(
+      expect.objectContaining({ fromDate: '2026-10-06', weeks: 8 }),
+      expect.anything(),
+    )
+    expect(saveLatestWeeklySchedule).toHaveBeenCalledWith({
+      filename: 'ONE-06102026.csv',
+      csv: expect.stringContaining('frmDtParam=2026-10-06'),
+    })
+  })
+
+  it('rejects a request without the cron secret', async () => {
+    const res = await runCron().set('Authorization', 'Bearer wrong')
+    expect(res.status).toBe(401)
+    expect(downloadOneP2pSchedule).not.toHaveBeenCalled()
+    expect(saveLatestWeeklySchedule).not.toHaveBeenCalled()
+  })
+})
+
+describe('GET /api/v1/schedules/one/weekly/latest', () => {
+  const getLatest = () => request(app).get('/api/v1/schedules/one/weekly/latest')
+
+  it('downloads the CSV the last cron run saved', async () => {
+    vi.mocked(readLatestWeeklySchedule).mockResolvedValue({ filename: 'ONE-06102026.csv', csv: WEEKLY_CSV })
+    const res = await getLatest()
+    expect(res.status).toBe(200)
+    expect(res.headers['content-type']).toContain('text/csv')
+    expect(res.headers['content-disposition']).toContain('ONE-06102026.csv')
+    expect(res.text).toBe(WEEKLY_CSV)
+  })
+
+  it('returns 404 before the cron job has run', async () => {
+    vi.mocked(readLatestWeeklySchedule).mockResolvedValue(null)
+    const res = await getLatest()
+    expect(res.status).toBe(404)
   })
 })

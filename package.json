@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@sparticuz/chromium": "^153.0.0",
+    "@vercel/blob": "^2.8.0",
     "cors": "^2.8.6",
     "exceljs": "^4.4.0",
     "express": "^5.2.1",

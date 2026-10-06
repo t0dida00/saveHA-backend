@@ -45,6 +45,10 @@ npx puppeteer browsers install chrome
 |---|---|---|
 | `NODE_ENV` | `development` | `development`, `production` or `test` |
 | `PORT` | `4000` | Port the API listens on |
+| `CRON_SECRET` | unset | Bearer token `GET /schedules/one/weekly/cron` requires. Unset means anyone can call it |
+| `BLOB_READ_WRITE_TOKEN` | unset | Vercel Blob token for saving and reading the cron's CSV. Vercel adds it when you connect a Blob store |
+
+**Locally, don't set `BLOB_STORE_ID`.** If it's set and the Vercel CLI is logged in, `@vercel/blob` signs in with OIDC instead of `BLOB_READ_WRITE_TOKEN`. Vercel only allows that in production, so reads fail with 403 and saves with `BlobOidcEnvironmentNotAllowedError`.
 
 Values are validated at startup in `src/config/env.ts`. If one is invalid, the server exits with a message saying which.
 
@@ -95,6 +99,19 @@ The response is a CSV file named `ONE-ddmmyyyy.csv`:
 - **N/A** means ONE doesn't run that service on that route.
 - **ERROR** means the download failed twice. The server log has the reason.
 
+### `GET /schedules/one/weekly/latest`
+
+The CSV saved by the last cron run (see below), as a file named `ONE-ddmmyyyy.csv` after the date it was scraped. Answers in under a second, compared with about 1 minute for `POST /schedules/one/weekly`. Returns 404 until the cron has run once.
+
+### `GET /schedules/one/weekly/cron`
+
+Called by Vercel Cron, not the frontend. Runs `POST /schedules/one/weekly` with today's date, `next: 8` and `services_routes: "all"`, then saves the CSV to Vercel Blob:
+
+- `schedules/one-weekly/latest.json`: the newest run, overwritten each time. `/latest` reads this.
+- `schedules/one-weekly/history/ONE-ddmmyyyy.csv`: a dated copy of every run.
+
+The blobs are private. When `CRON_SECRET` is set, requests need `Authorization: Bearer <CRON_SECRET>`, which Vercel Cron sends automatically. Responds `{ "saved": "ONE-06102026.csv" }`.
+
 ### `GET /schedules/one/p2p`
 
 The same layout for a single service and route, or ONE's original xlsx file.
@@ -112,14 +129,10 @@ The file is named `ONE-HPH-LAX-ddmmyyyy.csv`.
 
 ### Calling it from the frontend
 
-The success response is a file, not JSON, so read it as a blob:
+The success response is a file, not JSON, so read it as a blob. To get the cron's latest CSV:
 
 ```ts
-const res = await fetch(`${API_URL}/api/v1/schedules/one/weekly`, {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ next: 8, services_routes: 'all' }),
-})
+const res = await fetch(`${API_URL}/api/v1/schedules/one/weekly/latest`)
 if (!res.ok) throw new Error((await res.json()).error)
 
 const blob = await res.blob()
@@ -130,6 +143,8 @@ link.download = filename
 link.click()
 URL.revokeObjectURL(link.href)
 ```
+
+For a fresh scrape with your own options, make the same call as `POST /schedules/one/weekly` with a JSON body, e.g. `{ "next": 4, "services_routes": "all" }`.
 
 CORS allows any origin, and `Content-Disposition` is exposed, so the frontend can read the filename.
 
@@ -143,6 +158,8 @@ The repo deploys to Vercel as-is: pushing to `main` builds production.
 
 - **`vercel.json`** turns off Vercel's Express auto-detection, runs `npm run build`, and sends every request to `api/index.js`, which serves the compiled app from `dist/`. Functions may run up to 300 seconds.
 - **Chrome:** Vercel functions can't run the Chrome that Puppeteer downloads, so when `VERCEL` is set, `launchBrowser()` starts the serverless build from `@sparticuz/chromium` instead. `vercel.json` includes its binaries in the function.
+- **Cron:** `vercel.json` calls `GET /api/v1/schedules/one/weekly/cron` daily at 01:00 UTC (`0 1 * * *`). Cron times are UTC, so 08:00 in Vietnam is 01:00. On the Hobby plan a cron runs at most once a day, at some point within the chosen hour.
+- **Blob storage:** in the Vercel dashboard, open **Storage → Create → Blob**, choose **Private** access, and connect the store to this project. That adds `BLOB_READ_WRITE_TOKEN`. Also add `CRON_SECRET` under **Settings → Environment Variables**, then redeploy.
 - **`public/`** is intentionally empty. It stops Vercel from serving repository files as static files.
 
 ## How the ONE download works
@@ -186,7 +203,8 @@ src/
     health/                  GET /health
     schedules/
       schedules.routes.ts    Routes
-      schedules.controller.ts  Request validation, weekly orchestration, saving files
+      schedules.controller.ts  Request validation, weekly orchestration, cron
+      scheduleStore.ts       Saves and reads the cron's CSV in Vercel Blob
       one.scraper.ts         Puppeteer flow on ONE's site
       oneServices.ts         Default services and routes
       oneLocations.ts        Location codes → ONE names

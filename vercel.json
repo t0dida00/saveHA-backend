@@ -9,5 +9,6 @@
       "includeFiles": "node_modules/@sparticuz/chromium/bin/**"
     }
   },
+  "crons": [{ "path": "/api/v1/schedules/one/weekly/cron", "schedule": "0 1 * * *" }],
   "rewrites": [{ "source": "/(.*)", "destination": "/api" }]
 }

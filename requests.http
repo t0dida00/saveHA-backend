@@ -3,6 +3,13 @@
 ### Health check
 GET {{baseUrl}}/health
 
+### Latest CSV saved by the cron (404 until it has run once)
+GET {{baseUrl}}/schedules/one/weekly/latest
+
+### Run the cron by hand: scrape every service and save to Vercel Blob (~1 min, needs BLOB_READ_WRITE_TOKEN)
+GET {{baseUrl}}/schedules/one/weekly/cron
+Authorization: Bearer {{$dotenv CRON_SECRET}}
+
 ### All default ONE services side by side, one column each (takes ~1 min)
 POST {{baseUrl}}/schedules/one/weekly
 Content-Type: application/json
