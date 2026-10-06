@@ -1,4 +1,4 @@
-import { get, put } from '@vercel/blob'
+import { get, list, put } from '@vercel/blob'
 
 // The newest cron run always overwrites this path, so readers never have to list the store.
 // JSON rather than CSV so the dated filename travels with it.
@@ -25,6 +25,19 @@ export async function readLatestWeeklySchedule(): Promise<StoredSchedule | null>
   const result = await get(LATEST_PATH, { access: 'private', useCache: false })
   if (!result || result.statusCode !== 200) return null
   return (await new Response(result.stream).json()) as StoredSchedule
+}
+
+/** The newest dated copies saved by the cron, newest first, e.g. for the schedule chatbot */
+export async function readRecentWeeklySchedules(count = 3): Promise<StoredSchedule[]> {
+  const { blobs } = await list({ prefix: `${HISTORY_DIR}/` })
+  const recent = blobs.sort((a, b) => b.uploadedAt.getTime() - a.uploadedAt.getTime()).slice(0, count)
+  return Promise.all(
+    recent.map(async (blob) => {
+      const result = await get(blob.pathname, { access: 'private', useCache: false })
+      if (!result || result.statusCode !== 200) throw new Error(`Saved schedule ${blob.pathname} could not be read`)
+      return { filename: blob.pathname.slice(HISTORY_DIR.length + 1), csv: await new Response(result.stream).text() }
+    }),
+  )
 }
 
 export interface StoredHealthCheck {

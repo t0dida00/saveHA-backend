@@ -47,6 +47,8 @@ npx puppeteer browsers install chrome
 | `PORT` | `4000` | Port the API listens on |
 | `CRON_SECRET` | unset | Bearer token `GET /schedules/one/weekly/cron` requires. Unset means anyone can call it |
 | `BLOB_READ_WRITE_TOKEN` | unset | Vercel Blob token for saving and reading the cron's CSV. Vercel adds it when you connect a Blob store |
+| `HF_TOKEN` | unset | Hugging Face access token for `POST /chat` ([create one](https://huggingface.co/settings/tokens) with the "Make calls to Inference Providers" permission). Unset means `/chat` returns 503 |
+| `HF_MODEL` | `openai/gpt-oss-120b` | Chat model on Hugging Face Inference Providers. It must support tool calling ([list](https://huggingface.co/inference/models)) |
 
 **Locally, don't set `BLOB_STORE_ID`.** If it's set and the Vercel CLI is logged in, `@vercel/blob` signs in with OIDC instead of `BLOB_READ_WRITE_TOKEN`. Vercel only allows that in production, so reads fail with 403 and saves with `BlobOidcEnvironmentNotAllowedError`.
 
@@ -145,6 +147,42 @@ The same layout for a single service and route, or ONE's original xlsx file.
 
 The file is named `ONE-HPH-LAX-ddmmyyyy.csv`.
 
+### `POST /chat`
+
+A chatbot that answers questions about the last 3 schedules the Saturday cron saved, for example:
+
+- "How many voyages does MS2 have?"
+- "List the voyages of PS3."
+- "Are there any differences between the last 2 files?"
+
+Request body: the whole conversation so far, ending with the user's question. The server keeps no state, so send earlier turns again to ask follow-up questions. Up to 20 messages of up to 2,000 characters each.
+
+```json
+{
+  "messages": [
+    { "role": "user", "content": "How many voyages does MS2 have?" }
+  ]
+}
+```
+
+Response, where `files` lists the schedules the answer used, newest first:
+
+```json
+{
+  "answer": "**MS2** – 10 voyages (newest schedule)\n\n- HMM GAON 024E – Oct 09\n- ...",
+  "files": ["ONE-06102026.csv", "ONE-05102026.csv"]
+}
+```
+
+`answer` is Markdown. Takes about 2–10 seconds. Errors: `404` before the cron has saved a file, `503` without `HF_TOKEN`, `502` if Hugging Face fails.
+
+**How it works:** it doesn't use embeddings or a vector database, because the three files total only about 6K tokens. The CSVs are parsed into services and voyages (`parseWeeklyCsv.ts`), and the model (`HF_MODEL` on Hugging Face Inference Providers) answers by calling two tools that run in code:
+
+- `get_voyages`: one service's voyages and their exact count, in the newest file or a chosen one.
+- `compare_files`: voyages added, removed and rescheduled between two files (`scheduleDiff.ts`).
+
+Counts and differences therefore come from the data, not from the model. Comparisons only cover the dates both files include. Sailings that appear only because the newer file looks further ahead are reported separately as `furtherAhead`, not as changes. Each question makes 1–3 model calls, a fraction of a cent with the default model.
+
 ### Calling it from the frontend
 
 The success response is a file, not JSON, so read it as a blob. To get the cron's latest CSV:
@@ -177,7 +215,7 @@ The repo deploys to Vercel as-is: pushing to `main` builds production.
 - **`vercel.json`** turns off Vercel's Express auto-detection, runs `npm run build`, and sends every request to `api/index.js`, which serves the compiled app from `dist/`. Functions may run up to 300 seconds.
 - **Chrome:** Vercel functions can't run the Chrome that Puppeteer downloads, so when `VERCEL` is set, `launchBrowser()` starts the serverless build from `@sparticuz/chromium` instead. `vercel.json` includes its binaries in the function.
 - **Cron:** `vercel.json` calls `GET /api/v1/schedules/one/weekly/cron` every Saturday at 01:00 UTC (`0 1 * * 6`), and `GET /api/v1/schedules/one/healthCheck` every 3 days at 02:00 UTC (`0 2 */3 * *`: the 1st, 4th, 7th… of each month). Cron times are UTC, so 08:00 in Vietnam is 01:00. On the Hobby plan a cron runs at most once a day, at some point within the chosen hour.
-- **Blob storage:** in the Vercel dashboard, open **Storage → Create → Blob**, choose **Private** access, and connect the store to this project. That adds `BLOB_READ_WRITE_TOKEN`. Also add `CRON_SECRET` under **Settings → Environment Variables**, then redeploy.
+- **Blob storage:** in the Vercel dashboard, open **Storage → Create → Blob**, choose **Private** access, and connect the store to this project. That adds `BLOB_READ_WRITE_TOKEN`. Also add `CRON_SECRET` and `HF_TOKEN` (and `HF_MODEL` to change the chat model) under **Settings → Environment Variables**, then redeploy.
 - **`public/`** is intentionally empty. It stops Vercel from serving repository files as static files.
 
 ## How the ONE download works
@@ -219,6 +257,10 @@ src/
   lib/HttpError.ts           Throw new HttpError(404, '...') from any route
   modules/
     health/                  GET /health
+    chat/
+      chat.controller.ts     POST /chat: validation, loads and parses the last 3 CSVs
+      scheduleBot.ts         Hugging Face chat loop with tool calls
+      scheduleTools.ts       get_voyages and compare_files, run in code
     schedules/
       schedules.routes.ts    Routes
       schedules.controller.ts  Request validation, weekly orchestration, cron
@@ -228,7 +270,9 @@ src/
       oneLocations.ts        Location codes → ONE names
       scheduleXlsx.ts        Reads sailings from ONE's xlsx
       weeklySchedule.ts      Builds the weekly CSV
-tests/                       Endpoint tests against createApp(), with the scraper mocked
+      parseWeeklyCsv.ts      Reads a weekly CSV back into services and voyages
+      scheduleDiff.ts        Compares two weekly schedules
+tests/                       Endpoint tests against createApp(), with the scraper, Blob and model mocked
 requests.http                Example requests for REST Client
 ```
 

@@ -17,6 +17,34 @@ Authorization: Bearer {{$dotenv CRON_SECRET}}
 ### Result of the last health check (public, instant)
 GET {{baseUrl}}/schedules/one/healthCheck/latest
 
+### Chatbot over the last 3 saved schedules (needs HF_TOKEN)
+POST {{baseUrl}}/chat
+Content-Type: application/json
+
+{
+  "messages": [{ "role": "user", "content": "How many voyages does MS2 have?" }]
+}
+
+### Chatbot: differences between the last 2 files
+POST {{baseUrl}}/chat
+Content-Type: application/json
+
+{
+  "messages": [{ "role": "user", "content": "Are there any differences between the last 2 files?" }]
+}
+
+### Chatbot: follow-up question, sending the earlier turns again
+POST {{baseUrl}}/chat
+Content-Type: application/json
+
+{
+  "messages": [
+    { "role": "user", "content": "How many voyages does MS2 have?" },
+    { "role": "assistant", "content": "MS2 has 10 voyages in the newest schedule." },
+    { "role": "user", "content": "And in the older file?" }
+  ]
+}
+
 ### All default ONE services side by side, one column each (takes ~1 min)
 POST {{baseUrl}}/schedules/one/weekly
 Content-Type: application/json
