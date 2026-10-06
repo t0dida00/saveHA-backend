@@ -158,7 +158,7 @@ The repo deploys to Vercel as-is: pushing to `main` builds production.
 
 - **`vercel.json`** turns off Vercel's Express auto-detection, runs `npm run build`, and sends every request to `api/index.js`, which serves the compiled app from `dist/`. Functions may run up to 300 seconds.
 - **Chrome:** Vercel functions can't run the Chrome that Puppeteer downloads, so when `VERCEL` is set, `launchBrowser()` starts the serverless build from `@sparticuz/chromium` instead. `vercel.json` includes its binaries in the function.
-- **Cron:** `vercel.json` calls `GET /api/v1/schedules/one/weekly/cron` daily at 01:00 UTC (`0 1 * * *`). Cron times are UTC, so 08:00 in Vietnam is 01:00. On the Hobby plan a cron runs at most once a day, at some point within the chosen hour.
+- **Cron:** `vercel.json` calls `GET /api/v1/schedules/one/weekly/cron` every Saturday at 01:00 UTC (`0 1 * * 6`). Cron times are UTC, so 08:00 in Vietnam is 01:00. On the Hobby plan a cron runs at most once a day, at some point within the chosen hour.
 - **Blob storage:** in the Vercel dashboard, open **Storage → Create → Blob**, choose **Private** access, and connect the store to this project. That adds `BLOB_READ_WRITE_TOKEN`. Also add `CRON_SECRET` under **Settings → Environment Variables**, then redeploy.
 - **`public/`** is intentionally empty. It stops Vercel from serving repository files as static files.
 
