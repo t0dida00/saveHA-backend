@@ -25,6 +25,8 @@ export interface WeeklySchedule {
   file: string
   /** Date the schedule was scraped from, YYYY-MM-DD */
   date: string
+  /** Every week row in the file, including weeks with no sailings, e.g. { week: 'W41/2026', dates: '05/10-11/10' } */
+  weeks: { week: string; dates: string }[]
   services: ServiceSchedule[]
 }
 
@@ -46,7 +48,11 @@ export function parseWeeklyCsv(file: string, csv: string): WeeklySchedule {
     }
   })
 
-  return { file, date: fileDate(file), services }
+  const weeks = weekRows.map((row) => {
+    const [week = '', dates = ''] = row[0]!.split('\n')
+    return { week, dates }
+  })
+  return { file, date: fileDate(file), weeks, services }
 }
 
 /** "WAN HAI A03 E018/ OCT 08\nYM WIND 036E/ OCT 10" in week "W41/2026\n05/10-11/10" */

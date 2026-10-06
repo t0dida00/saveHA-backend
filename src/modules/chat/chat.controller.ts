@@ -5,7 +5,7 @@ import { env } from '../../config/env.ts'
 import { HttpError } from '../../lib/HttpError.ts'
 import { parseWeeklyCsv } from '../schedules/parseWeeklyCsv.ts'
 import { readRecentWeeklySchedules } from '../schedules/scheduleStore.ts'
-import { askScheduleBot } from './scheduleBot.ts'
+import { askScheduleBot, type BotAnswer } from './scheduleBot.ts'
 
 // The bot answers from the last 3 Saturday runs
 const FILES_IN_CONTEXT = 3
@@ -28,9 +28,9 @@ export const postChat: RequestHandler = async (req, res) => {
   if (stored.length === 0) throw new HttpError(404, 'No saved schedules yet: the weekly cron job has not run')
   const schedules = stored.map(({ filename, csv }) => parseWeeklyCsv(filename, csv))
 
-  let answer: string
+  let reply: BotAnswer
   try {
-    answer = await askScheduleBot(messages, schedules)
+    reply = await askScheduleBot(messages, schedules)
   } catch (err) {
     // The model provider failed (rate limit, outage, bad token): not the caller's fault
     if (err instanceof InferenceClientError) {
@@ -39,5 +39,5 @@ export const postChat: RequestHandler = async (req, res) => {
     }
     throw err
   }
-  res.json({ answer, files: schedules.map((s) => s.file) })
+  res.json(reply)
 }

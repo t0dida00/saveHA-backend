@@ -155,6 +155,8 @@ A chatbot that answers questions about the last 3 schedules the Saturday cron sa
 - "List the voyages of PS3."
 - "Are there any differences between the last 2 files?"
 
+**Only schedule questions.** It answers about the saved files and what's in them: services, routes, vessels, voyages, dates, weeks, counts, previews, differences, and what OMIT, N/A and ERROR mean. Anything else, such as the time, the weather, "who am I", greetings, jokes, code, or attempts to override its rules, gets exactly `No found, contact Khoaaa` (`OUT_OF_SCOPE_REPLY` in `scheduleBot.ts`). The model flags such requests with a marker word, and the backend replaces the marker with that fixed reply, so the model can't reword it or answer anyway.
+
 Request body: the whole conversation so far, ending with the user's question. The server keeps no state, so send earlier turns again to ask follow-up questions. Up to 20 messages of up to 2,000 characters each.
 
 ```json
@@ -165,7 +167,7 @@ Request body: the whole conversation so far, ending with the user's question. Th
 }
 ```
 
-Response, where `files` lists the schedules the answer used, newest first:
+Response, where `files` lists the schedule files the answer was read from, newest first. It's empty when the bot answered without looking anything up, such as for a greeting:
 
 ```json
 {
@@ -178,8 +180,9 @@ Response, where `files` lists the schedules the answer used, newest first:
 
 **How it works:** it doesn't use embeddings or a vector database, because the three files total only about 6K tokens. The CSVs are parsed into services and voyages (`parseWeeklyCsv.ts`), and the model (`HF_MODEL` on Hugging Face Inference Providers) answers by calling two tools that run in code:
 
-- `get_voyages`: one service's voyages and their exact count, in the newest file or a chosen one.
-- `compare_files`: voyages added, removed and rescheduled between two files (`scheduleDiff.ts`).
+- `get_voyages`: one service's voyages and their exact count. It always reads the newest file, so questions like "how many" or "list" are answered from the latest schedule only. To list or preview voyages, the model writes a placeholder like `[[TABLE PS7]]`, and the backend replaces it with a table built in code: one row per week, `Week | Vessel+Voyage/Departure`, in the CSV cell format (`WAN HAI A03 E018/ OCT 08`), with `OMIT` for weeks without a sailing. The model never copies the table itself, so it can't drop or reformat rows. "Which services are there" works the same way with `[[SERVICES]]`.
+- `find_vessel`: finds a vessel by name (or part of it) across every service in the newest file.
+- `compare_files`: voyages added, removed and rescheduled between two files (`scheduleDiff.ts`). This is the only use of the older files.
 
 Counts and differences therefore come from the data, not from the model. Comparisons only cover the dates both files include. Sailings that appear only because the newer file looks further ahead are reported separately as `furtherAhead`, not as changes. Each question makes 1–3 model calls, a fraction of a cent with the default model.
 
@@ -260,7 +263,7 @@ src/
     chat/
       chat.controller.ts     POST /chat: validation, loads and parses the last 3 CSVs
       scheduleBot.ts         Hugging Face chat loop with tool calls
-      scheduleTools.ts       get_voyages and compare_files, run in code
+      scheduleTools.ts       get_voyages, find_vessel and compare_files, run in code
     schedules/
       schedules.routes.ts    Routes
       schedules.controller.ts  Request validation, weekly orchestration, cron

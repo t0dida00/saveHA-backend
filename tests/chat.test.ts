@@ -2,7 +2,7 @@ import request from 'supertest'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp } from '../src/app.ts'
 import { askScheduleBot } from '../src/modules/chat/scheduleBot.ts'
-import { runScheduleTool } from '../src/modules/chat/scheduleTools.ts'
+import { runScheduleTool, servicesTable, weekTable } from '../src/modules/chat/scheduleTools.ts'
 import { parseWeeklyCsv, type WeeklySchedule } from '../src/modules/schedules/parseWeeklyCsv.ts'
 import { diffSchedules } from '../src/modules/schedules/scheduleDiff.ts'
 import { readRecentWeeklySchedules } from '../src/modules/schedules/scheduleStore.ts'
@@ -49,6 +49,11 @@ describe('parseWeeklyCsv', () => {
   it('reads services, routes, statuses and voyages back from the CSV', () => {
     expect(OCT_05.file).toBe('ONE-05102026.csv')
     expect(OCT_05.date).toBe('2026-10-05')
+    expect(OCT_05.weeks).toEqual([
+      { week: 'W41/2026', dates: '05/10-11/10' },
+      { week: 'W42/2026', dates: '12/10-18/10' },
+      { week: 'W43/2026', dates: '19/10-25/10' },
+    ])
     expect(OCT_05.services.map((s) => [s.service, s.route, s.status, s.voyages.length])).toEqual([
       ['PS7', 'HPH/VUT - LAX/LGB/OAK', 'ok', 3],
       ['MS2', 'VUT - LGB/OAK', 'ok', 1],
@@ -124,16 +129,20 @@ describe('diffSchedules', () => {
 
 describe('schedule tools', () => {
   const schedules = [OCT_10, OCT_05] // newest first, as the store returns them
-  const run = (name: string, args: object) => JSON.parse(runScheduleTool(schedules, name, JSON.stringify(args)))
+  const run = (name: string, args: object) => JSON.parse(runScheduleTool(schedules, name, JSON.stringify(args)).content)
 
-  it('get_voyages counts a service in the newest file by default', () => {
-    const result = run('get_voyages', { service: 'ps7' })
-    expect(result).toMatchObject({ file: 'ONE-10102026.csv', service: 'PS7', count: 3 })
+  it('get_voyages counts a service in the newest file', () => {
+    const result = runScheduleTool(schedules, 'get_voyages', '{"service":"ps7"}')
+    expect(JSON.parse(result.content)).toMatchObject({ file: 'ONE-10102026.csv', service: 'PS7', count: 3 })
+    expect(result.files).toEqual(['ONE-10102026.csv'])
   })
 
-  it('get_voyages reads an older file by name or date', () => {
-    expect(run('get_voyages', { service: 'PS7', file: 'ONE-05102026.csv' }).count).toBe(3)
-    expect(run('get_voyages', { service: 'MS2', file: '2026-10-05' }).count).toBe(1)
+  it('get_voyages always reads the newest file, even when asked for an older one', () => {
+    // EC3 is N/A in the older file and ERROR in the newest
+    expect(run('get_voyages', { service: 'EC3', file: 'ONE-05102026.csv' })).toMatchObject({
+      file: 'ONE-10102026.csv',
+      status: 'ERROR',
+    })
   })
 
   it('get_voyages lists the available services for an unknown one', () => {
@@ -143,19 +152,59 @@ describe('schedule tools', () => {
     })
   })
 
+  it('get_voyages builds a week-by-week table in the CSV cell format', () => {
+    expect(weekTable(OCT_05, OCT_05.services[0]!)).toBe(
+      [
+        '| Week | Vessel+Voyage/Departure |',
+        '|---|---|',
+        '| W41/2026 (05/10-11/10) | WAN HAI A03 E018/ OCT 08 |',
+        '| W42/2026 (12/10-18/10) | OMIT |',
+        '| W43/2026 (19/10-25/10) | HYUNDAI NEPTUNE 046E/ OCT 19 |',
+        '|  | WAN HAI A19 E009/ OCT 25 |',
+      ].join('\n'),
+    )
+    expect(run('get_voyages', { service: 'PS7' }).tablePlaceholder).toBe('[[TABLE PS7]]')
+    // No sailings to show for a service ONE doesn't run
+    expect(run('get_voyages', { service: 'EC3' }).tablePlaceholder).toBeUndefined()
+  })
+
+  it('find_vessel finds a vessel by part of its name across services in the newest file', () => {
+    const result = runScheduleTool(schedules, 'find_vessel', '{"vessel":"one friend"}')
+    expect(JSON.parse(result.content)).toMatchObject({
+      count: 1,
+      matches: [{ service: 'MS2', vessel: 'ONE FRIENDSHIP', voyage: '013E', departure: '2026-11-03', cell: 'ONE FRIENDSHIP 013E/ NOV 03' }],
+    })
+    expect(result.files).toEqual(['ONE-10102026.csv'])
+    expect(run('find_vessel', { vessel: 'EVER GIVEN' }).error).toContain('No vessel matching "EVER GIVEN"')
+  })
+
+  it('servicesTable lists every service with its route and voyage count', () => {
+    expect(servicesTable(OCT_05)).toBe(
+      [
+        '| Service | Route | Voyages |',
+        '|---|---|---|',
+        '| PS7 | HPH/VUT - LAX/LGB/OAK | 3 |',
+        '| MS2 | VUT - LGB/OAK | 1 |',
+        '| EC3 | VUT - ORF/CHS/SAV/NYC/JAX | N/A |',
+      ].join('\n'),
+    )
+  })
+
   it('compare_files compares the 2 newest files by default, oldest first', () => {
-    const result = run('compare_files', {})
-    expect(result).toMatchObject({ older: 'ONE-05102026.csv', newer: 'ONE-10102026.csv' })
+    const result = runScheduleTool(schedules, 'compare_files', '{}')
+    expect(JSON.parse(result.content)).toMatchObject({ older: 'ONE-05102026.csv', newer: 'ONE-10102026.csv' })
+    expect(result.files).toEqual(['ONE-10102026.csv', 'ONE-05102026.csv'])
     expect(run('compare_files', { older: 'ONE-10102026.csv', newer: 'ONE-05102026.csv' }).older).toBe('ONE-05102026.csv')
   })
 
   it('compare_files explains when only one file is saved', () => {
-    const result = JSON.parse(runScheduleTool([OCT_10], 'compare_files', '{}'))
-    expect(result.error).toContain('Only one schedule file')
+    const result = runScheduleTool([OCT_10], 'compare_files', '{}')
+    expect(JSON.parse(result.content).error).toContain('Only one schedule file')
+    expect(result.files).toEqual([])
   })
 
   it('returns errors for bad arguments and unknown tools instead of throwing', () => {
-    expect(JSON.parse(runScheduleTool(schedules, 'get_voyages', '{not json')).error).toContain('not valid JSON')
+    expect(JSON.parse(runScheduleTool(schedules, 'get_voyages', '{not json').content).error).toContain('not valid JSON')
     expect(run('get_voyages', {}).error).toBeDefined()
     expect(run('delete_everything', {}).error).toContain('Unknown tool')
   })
@@ -171,11 +220,11 @@ describe('POST /api/v1/chat', () => {
     vi.mocked(askScheduleBot).mockReset()
   })
 
-  it('answers from the saved files', async () => {
+  it('answers from the saved files and returns the files the answer used', async () => {
     vi.mocked(readRecentWeeklySchedules).mockResolvedValue([
       { filename: 'ONE-10102026.csv', csv: weeklyScheduleCsv([column('PS7\n(HPH - LAX)', [['2026-10-12', 'A 001E']])], '2026-10-10') },
     ])
-    vi.mocked(askScheduleBot).mockResolvedValue('PS7 has 1 voyage.')
+    vi.mocked(askScheduleBot).mockResolvedValue({ answer: 'PS7 has 1 voyage.', files: ['ONE-10102026.csv'] })
 
     const res = await ask(question)
     expect(res.status).toBe(200)
@@ -198,5 +247,41 @@ describe('POST /api/v1/chat', () => {
     const res = await ask({ messages: [...question.messages, { role: 'assistant', content: 'Hi' }] })
     expect(res.status).toBe(400)
     expect(readRecentWeeklySchedules).not.toHaveBeenCalled()
+  })
+})
+
+// The route tests mock scheduleBot, so load the real module here
+const realBot = () => vi.importActual<typeof import('../src/modules/chat/scheduleBot.ts')>('../src/modules/chat/scheduleBot.ts')
+
+describe('fillTables', () => {
+  it('swaps the placeholder for the full week-by-week table from the newest file', async () => {
+    const { fillTables } = await realBot()
+    const used = new Set<string>()
+    const text = fillTables('PS7 has 3 voyages:\n[[TABLE PS7]]', [OCT_05], used)
+    // Every week, including the OMIT one the model might leave out
+    expect(text).toBe(`PS7 has 3 voyages:\n\n${weekTable(OCT_05, OCT_05.services[0]!)}`)
+    expect(text).toContain('| W42/2026 (12/10-18/10) | OMIT |')
+    expect(used).toEqual(new Set(['ONE-05102026.csv']))
+  })
+
+  it('swaps [[SERVICES]] for the list of every service', async () => {
+    const { fillTables } = await realBot()
+    expect(fillTables('The services are:\n[[SERVICES]]', [OCT_05], new Set())).toBe(
+      `The services are:\n\n${servicesTable(OCT_05)}`,
+    )
+  })
+
+  it('leaves placeholders for unknown or N/A services alone', async () => {
+    const { fillTables } = await realBot()
+    expect(fillTables('[[TABLE MS3]] [[TABLE EC3]]', [OCT_05], new Set())).toBe('[[TABLE MS3]] [[TABLE EC3]]')
+  })
+})
+
+describe('plainText', () => {
+  it('swaps the narrow spaces and non-breaking hyphens models write for plain ones', async () => {
+    const { plainText } = await realBot()
+    expect(plainText(' HMM GAON 024E – Oct 09 in ONE‑05102026.csv ')).toBe(
+      'HMM GAON 024E – Oct 09 in ONE-05102026.csv',
+    )
   })
 })
