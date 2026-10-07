@@ -1,5 +1,4 @@
 import type { DcsaLeg, DcsaPointToPoint } from './hlag.client.ts'
-import type { HplSailing } from './hpl.scraper.ts'
 import type { ScheduleColumn } from './weeklySchedule.ts'
 
 /**
@@ -36,25 +35,4 @@ function firstVesselLeg(point: DcsaPointToPoint): DcsaLeg | undefined {
   return [...point.legs]
     .sort((a, b) => (a.sequenceNumber ?? 0) - (b.sequenceNumber ?? 0))
     .find((leg) => leg.transport.modeOfTransport === 'VESSEL')
-}
-
-/**
- * Turns the cards read from Hapag-Lloyd's schedule page into weekly CSV columns, one per service.
- * Cells read "WAN HAI A15/ E010/ OCT 13": vessel, voyage, then the date the CSV adds.
- */
-export function scrapedColumns(sailings: HplSailing[], origin: string, destination: string, url: string): ScheduleColumn[] {
-  const route = `${origin.slice(2)} - ${destination.slice(2)}`
-  const byService = new Map<string, Map<string, { departure: string; vessel: string }>>()
-
-  for (const sailing of sailings) {
-    const service = sailing.service || 'UNKNOWN'
-    const vessel = [sailing.vessel || 'TBN', sailing.voyage].filter(Boolean).join('/ ')
-    const sailingsOfService = byService.get(service) ?? new Map()
-    sailingsOfService.set(`${vessel} ${sailing.departure}`, { departure: sailing.departure, vessel })
-    byService.set(service, sailingsOfService)
-  }
-
-  return [...byService]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([service, list]) => ({ label: `${service}\n(${route})`, url, sailings: [...list.values()] }))
 }

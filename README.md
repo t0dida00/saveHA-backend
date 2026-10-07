@@ -134,25 +134,33 @@ The verdict of the last health check, for the frontend's status dot. Public and 
 
 ### `POST /schedules/hpl/weekly`
 
-Hapag-Lloyd sailings between two ports, in the same weekly CSV layout as ONE: one column per service, one row per week. It uses Hapag-Lloyd's official Commercial Schedules API (DCSA standard), not their website, which blocks automated browsers. It needs the `HLAG_*` settings and takes a few seconds, because no browser is involved.
+Hapag-Lloyd's search for a port pair, as a query string per service. Their website blocks automated browsers, so no sailings are read: the file has the `HPL` header row and the `QueryString` row, and no week rows. Answers instantly.
 
 Request body (every field is optional):
 
 ```json
-{ "date": "2026-10-06", "next": 8, "from": "VNVUT", "to": "USLAX" }
+{ "date": "2026-10-06", "next": 8, "from": "VNVUT", "to": "USNYC", "services": ["AA7", "US4"] }
 ```
 
 | Field | Values | Default |
 |---|---|---|
 | `date` | First departure date, `YYYY-MM-DD` | today |
-| `next` | Weeks to search: `2`, `4`, `6` or `8` | `8` |
-| `from` / `to` | UN/LOCODEs | `VNVUT` / `USLAX` |
+| `next` | `2`, `4`, `6` or `8`; accepted like ONE's, not used in the query string | `8` |
+| `from` / `to` | UN/LOCODEs | `VNVUT` / `USNYC` |
+| `services` | Service codes, one column each | none: one column named after the route |
 
-The response is `HPL-ddmmyyyy.csv`. Each sailing is the first ship leaving the origin port, named by its service (e.g. `PN1`), vessel and export voyage, written like ONE's cells: `HMM ALGECIRAS 042E/ OCT 08`. Routes that share that ship but continue differently (transhipments) count as one sailing. Errors: `400` for bad input, `502` if Hapag-Lloyd fails or rejects the credentials, `503` without the `HLAG_*` settings.
+The response is `HPL-ddmmyyyy.csv`:
+
+```
+HPL,"AA7\n(VUT - NYC)","US4\n(VUT - NYC)"
+QueryString,sl=VNVUT&el=USNYC&exportHaulage=MH&importHaulage=MH&containerType=45GP&departureDate=2026-10-06&usFlag=false&dg=false&reefer,…
+```
+
+Errors: `400` for bad input.
 
 ### `GET /schedules/hpl/weekly/cron` and `GET /schedules/hpl/weekly/latest`
 
-Like ONE's: Vercel Cron runs the search for VNVUT → USLAX, from today, for 8 weeks, every Saturday at 01:30 UTC, and saves it to Vercel Blob under `schedules/hpl-weekly/`. `/latest` returns the saved CSV instantly (404 before the first run). The cron needs the same `CRON_SECRET` header.
+Like ONE's: the cron saves the VNVUT → USNYC query-string file for today to Vercel Blob under `schedules/hpl-weekly/`, and `/latest` returns it (404 before the first run). Not scheduled in `vercel.json`. The cron needs the same `CRON_SECRET` header.
 
 ### `GET /schedules/one/p2p`
 
@@ -200,7 +208,7 @@ The repo deploys to Vercel as-is: pushing to `main` builds production.
 
 - **`vercel.json`** turns off Vercel's Express auto-detection, runs `npm run build`, and sends every request to `api/index.js`, which serves the compiled app from `dist/`. Functions may run up to 300 seconds.
 - **Chrome:** Vercel functions can't run the Chrome that Puppeteer downloads, so when `VERCEL` is set, `launchBrowser()` starts the serverless build from `@sparticuz/chromium` instead. `vercel.json` includes its binaries in the function.
-- **Cron:** `vercel.json` calls `GET /api/v1/schedules/one/weekly/cron` every Saturday at 01:00 UTC (`0 1 * * 6`), `GET /api/v1/schedules/hpl/weekly/cron` every Saturday at 01:30 UTC (`30 1 * * 6`), and `GET /api/v1/schedules/one/healthCheck` every 3 days at 02:00 UTC (`0 2 */3 * *`: the 1st, 4th, 7th… of each month). Cron times are UTC, so 08:00 in Vietnam is 01:00. On the Hobby plan a cron runs at most once a day, at some point within the chosen hour.
+- **Cron:** `vercel.json` calls `GET /api/v1/schedules/one/weekly/cron` every Saturday at 01:00 UTC (`0 1 * * 6`), and `GET /api/v1/schedules/one/healthCheck` every 3 days at 02:00 UTC (`0 2 */3 * *`: the 1st, 4th, 7th… of each month). Cron times are UTC, so 08:00 in Vietnam is 01:00. On the Hobby plan a cron runs at most once a day, at some point within the chosen hour.
 - **Blob storage:** in the Vercel dashboard, open **Storage → Create → Blob**, choose **Private** access, and connect the store to this project. That adds `BLOB_READ_WRITE_TOKEN`. Also add `CRON_SECRET` under **Settings → Environment Variables**, then redeploy.
 - **`public/`** is intentionally empty. It stops Vercel from serving repository files as static files.
 
