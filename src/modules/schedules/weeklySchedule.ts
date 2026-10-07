@@ -23,9 +23,9 @@ export interface ScheduleColumn {
  *
  * Weeks with no sailing read OMIT; weeks with several list each on its own line.
  */
-export function weeklyScheduleCsv(columns: ScheduleColumn[], fromDate: string): string {
+export function weeklyScheduleCsv(columns: ScheduleColumn[], fromDate: string, corner = 'ONE'): string {
   const rows = [
-    ['ONE', ...columns.map((column) => column.label)],
+    [corner, ...columns.map((column) => column.label)],
     ['QueryString', ...columns.map((column) => column.url)],
   ]
 

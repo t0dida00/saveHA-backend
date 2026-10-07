@@ -46,6 +46,8 @@ npx puppeteer browsers install chrome
 | `NODE_ENV` | `development` | `development`, `production` or `test` |
 | `PORT` | `4000` | Port the API listens on |
 | `CRON_SECRET` | unset | Bearer token `GET /schedules/one/weekly/cron` requires. Unset means anyone can call it |
+| `HLAG_API_URL` | unset | Hapag-Lloyd Commercial Schedules API: the full `point-to-point-routes` URL shown in your [API portal](https://api-portal.hlag.com) app. Unset means the `/hpl` routes return 503 |
+| `HLAG_CLIENT_ID` / `HLAG_CLIENT_SECRET` | unset | Your API portal app's credentials, sent as `X-IBM-Client-Id` / `X-IBM-Client-Secret` |
 | `BLOB_READ_WRITE_TOKEN` | unset | Vercel Blob token for saving and reading the cron's CSV. Vercel adds it when you connect a Blob store |
 
 **Locally, don't set `BLOB_STORE_ID`.** If it's set and the Vercel CLI is logged in, `@vercel/blob` signs in with OIDC instead of `BLOB_READ_WRITE_TOKEN`. Vercel only allows that in production, so reads fail with 403 and saves with `BlobOidcEnvironmentNotAllowedError`.
@@ -130,6 +132,28 @@ The verdict of the last health check, for the frontend's status dot. Public and 
 { "alive": true, "checkedAt": "2026-10-06T02:00:12.000Z", "seconds": 12 }
 ```
 
+### `POST /schedules/hpl/weekly`
+
+Hapag-Lloyd sailings between two ports, in the same weekly CSV layout as ONE: one column per service, one row per week. It uses Hapag-Lloyd's official Commercial Schedules API (DCSA standard), not their website, which blocks automated browsers. It needs the `HLAG_*` settings and takes a few seconds, because no browser is involved.
+
+Request body (every field is optional):
+
+```json
+{ "date": "2026-10-06", "next": 8, "from": "VNVUT", "to": "USLAX" }
+```
+
+| Field | Values | Default |
+|---|---|---|
+| `date` | First departure date, `YYYY-MM-DD` | today |
+| `next` | Weeks to search: `2`, `4`, `6` or `8` | `8` |
+| `from` / `to` | UN/LOCODEs | `VNVUT` / `USLAX` |
+
+The response is `HPL-ddmmyyyy.csv`. Each sailing is the first ship leaving the origin port, named by its service (e.g. `PN1`), vessel and export voyage, written like ONE's cells: `HMM ALGECIRAS 042E/ OCT 08`. Routes that share that ship but continue differently (transhipments) count as one sailing. Errors: `400` for bad input, `502` if Hapag-Lloyd fails or rejects the credentials, `503` without the `HLAG_*` settings.
+
+### `GET /schedules/hpl/weekly/cron` and `GET /schedules/hpl/weekly/latest`
+
+Like ONE's: Vercel Cron runs the search for VNVUT → USLAX, from today, for 8 weeks, every Saturday at 01:30 UTC, and saves it to Vercel Blob under `schedules/hpl-weekly/`. `/latest` returns the saved CSV instantly (404 before the first run). The cron needs the same `CRON_SECRET` header.
+
 ### `GET /schedules/one/p2p`
 
 The same layout for a single service and route, or ONE's original xlsx file.
@@ -176,7 +200,7 @@ The repo deploys to Vercel as-is: pushing to `main` builds production.
 
 - **`vercel.json`** turns off Vercel's Express auto-detection, runs `npm run build`, and sends every request to `api/index.js`, which serves the compiled app from `dist/`. Functions may run up to 300 seconds.
 - **Chrome:** Vercel functions can't run the Chrome that Puppeteer downloads, so when `VERCEL` is set, `launchBrowser()` starts the serverless build from `@sparticuz/chromium` instead. `vercel.json` includes its binaries in the function.
-- **Cron:** `vercel.json` calls `GET /api/v1/schedules/one/weekly/cron` every Saturday at 01:00 UTC (`0 1 * * 6`), and `GET /api/v1/schedules/one/healthCheck` every 3 days at 02:00 UTC (`0 2 */3 * *`: the 1st, 4th, 7th… of each month). Cron times are UTC, so 08:00 in Vietnam is 01:00. On the Hobby plan a cron runs at most once a day, at some point within the chosen hour.
+- **Cron:** `vercel.json` calls `GET /api/v1/schedules/one/weekly/cron` every Saturday at 01:00 UTC (`0 1 * * 6`), `GET /api/v1/schedules/hpl/weekly/cron` every Saturday at 01:30 UTC (`30 1 * * 6`), and `GET /api/v1/schedules/one/healthCheck` every 3 days at 02:00 UTC (`0 2 */3 * *`: the 1st, 4th, 7th… of each month). Cron times are UTC, so 08:00 in Vietnam is 01:00. On the Hobby plan a cron runs at most once a day, at some point within the chosen hour.
 - **Blob storage:** in the Vercel dashboard, open **Storage → Create → Blob**, choose **Private** access, and connect the store to this project. That adds `BLOB_READ_WRITE_TOKEN`. Also add `CRON_SECRET` under **Settings → Environment Variables**, then redeploy.
 - **`public/`** is intentionally empty. It stops Vercel from serving repository files as static files.
 
@@ -224,6 +248,9 @@ src/
       schedules.controller.ts  Request validation, weekly orchestration, cron
       scheduleStore.ts       Saves and reads the cron's CSV in Vercel Blob
       one.scraper.ts         Puppeteer flow on ONE's site
+      hlag.client.ts         Hapag-Lloyd Commercial Schedules API (DCSA point-to-point routes)
+      hlagSchedule.ts        Hapag-Lloyd routes → weekly CSV columns
+      hlag.controller.ts     /hpl/weekly, its cron and latest
       oneServices.ts         Default services and routes
       oneLocations.ts        Location codes → ONE names
       scheduleXlsx.ts        Reads sailings from ONE's xlsx

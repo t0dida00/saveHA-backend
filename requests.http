@@ -17,6 +17,20 @@ Authorization: Bearer {{$dotenv CRON_SECRET}}
 ### Result of the last health check (public, instant)
 GET {{baseUrl}}/schedules/one/healthCheck/latest
 
+### Hapag-Lloyd VNVUT → USLAX, one column per service (needs HLAG_* settings)
+POST {{baseUrl}}/schedules/hpl/weekly
+Content-Type: application/json
+
+{
+  "date": "2026-10-06",
+  "next": 8,
+  "from": "VNVUT",
+  "to": "USLAX"
+}
+
+### Latest Hapag-Lloyd CSV saved by the cron
+GET {{baseUrl}}/schedules/hpl/weekly/latest
+
 ### All default ONE services side by side, one column each (takes ~1 min)
 POST {{baseUrl}}/schedules/one/weekly
 Content-Type: application/json

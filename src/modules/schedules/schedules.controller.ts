@@ -250,13 +250,13 @@ async function serviceColumn(
 }
 
 /** Vercel Cron sends `Authorization: Bearer $CRON_SECRET` when that env var is set */
-function requireCronSecret(req: Request) {
+export function requireCronSecret(req: Request) {
   if (env.CRON_SECRET && req.get('authorization') !== `Bearer ${env.CRON_SECRET}`) {
     throw new HttpError(401, 'Unauthorized')
   }
 }
 
-function sendFile(res: Response, filename: string, data: Buffer | string) {
+export function sendFile(res: Response, filename: string, data: Buffer | string) {
   res.attachment(filename)
   res.type(path.extname(filename)).send(data)
 }
@@ -278,12 +278,12 @@ function seconds(since: number): string {
   return `${((Date.now() - since) / 1000).toFixed(1)}s`
 }
 
-function today(): string {
+export function today(): string {
   return new Date().toISOString().slice(0, 10)
 }
 
 /** "2026-10-06" -> "06102026" */
-function ddmmyyyy(date: string): string {
+export function ddmmyyyy(date: string): string {
   const [year, month, day] = date.split('-')
   return `${day}${month}${year}`
 }
